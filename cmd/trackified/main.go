@@ -33,8 +33,11 @@ Usage:
   trackified stop <id>                     stop tracking a parcel
   trackified carriers [search]             list or search carriers
   trackified detect <number>               guess the carrier of a number
-  trackified webhooks list|add|rm|test     manage webhook endpoints
+  trackified resolve <name>                map a carrier name to a carrier id
+  trackified webhooks list|add|update|rotate-secret|rm|test
+                                           manage webhook endpoints
   trackified usage                         this month's usage and limits
+  trackified health                        check that the API is up
   trackified verify-webhook --secret s --header h --body-file f
   trackified version
 

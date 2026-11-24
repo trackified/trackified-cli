@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,13 +32,13 @@ func TestVerifyWebhookVector(t *testing.T) {
 	if code != 0 || !strings.Contains(out, `"valid": true`) {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
-	code, _, _ = runCLI(t, "", "verify-webhook", "--secret", "wrong", "--header", hdr, "--body-file", body, "--tolerance", "876000h")
-	if code != 1 {
-		t.Fatalf("wrong secret: code=%d", code)
+	code, out, _ = runCLI(t, "", "verify-webhook", "--secret", "wrong", "--header", hdr, "--body-file", body, "--tolerance", "876000h")
+	if code != 1 || out != "Signature INVALID (mismatch)\n" {
+		t.Fatalf("wrong secret: code=%d out=%q", code, out)
 	}
-	code, _, _ = runCLI(t, "", "verify-webhook", "--secret", "whsec_trackified_test_vector", "--header", hdr, "--body-file", body)
-	if code != 1 {
-		t.Fatalf("stale timestamp: code=%d", code)
+	code, out, _ = runCLI(t, "", "verify-webhook", "--secret", "whsec_trackified_test_vector", "--header", hdr, "--body-file", body, "--json")
+	if code != 1 || !strings.Contains(out, `"reason": "timestamp"`) {
+		t.Fatalf("stale timestamp: code=%d out=%s", code, out)
 	}
 }
 
@@ -105,5 +106,71 @@ func TestListJSONAndFlagsAfterArgs(t *testing.T) {
 	}
 	if code, _, _ := runCLI(t, "", "get"); code != 2 {
 		t.Fatalf("missing arg should be a usage error, got %d", code)
+	}
+}
+
+func TestV02Commands(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.Path+" "+r.URL.RawQuery+string(b))
+		switch r.URL.Path {
+		case "/v1/health":
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/carriers/resolve":
+			if r.URL.Query().Get("name") == "nope" {
+				_, _ = w.Write([]byte(`{"carrier":null,"confidence":0}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"carrier":"usps","name":"USPS","confidence":0.97,"matched":"alias"}`))
+		case "/v1/webhooks/wh_1":
+			_, _ = w.Write([]byte(`{"id":"wh_1","url":"https://x","enabled":false,"created_at":"2026-11-24T00:00:00Z"}`))
+		case "/v1/webhooks/wh_1/rotate-secret":
+			_, _ = w.Write([]byte(`{"id":"wh_1","secret":"whsec_new","previous_secret_expires_at":"2026-11-25T00:00:00Z","created_at":"2026-11-24T00:00:00Z"}`))
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("TRACKIFIED_BASE_URL", srv.URL+"/v1")
+	t.Setenv("TRACKIFIED_API_KEY", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AppData", t.TempDir())
+
+	if code, out, errOut := runCLI(t, "", "health"); code != 0 || out != "API status: ok\n" {
+		t.Fatalf("health without a key: code=%d out=%q err=%s", code, out, errOut)
+	}
+	t.Setenv("TRACKIFIED_API_KEY", "tk_test_x")
+	if code, out, _ := runCLI(t, "", "resolve", "USPS", "Priority", "Mail"); code != 0 || !strings.HasPrefix(out, "usps  USPS") {
+		t.Fatalf("resolve: code=%d out=%q", code, out)
+	}
+	if code, out, _ := runCLI(t, "", "resolve", "nope", "--json"); code != 1 || !strings.Contains(out, `"carrier": null`) {
+		t.Fatalf("resolve nope: code=%d out=%q", code, out)
+	}
+	if code, out, _ := runCLI(t, "", "webhooks", "update", "wh_1", "--disable", "--events", "tracking.delivered, tracking.exception"); code != 0 || !strings.Contains(out, "enabled: false") {
+		t.Fatalf("update: code=%d out=%q", code, out)
+	}
+	if code, out, _ := runCLI(t, "", "webhooks", "rotate-secret", "wh_1", "--expires-in", "48h"); code != 0 || !strings.Contains(out, "whsec_new") || !strings.Contains(out, "won't be shown again") {
+		t.Fatalf("rotate: code=%d out=%q", code, out)
+	}
+	for _, bad := range [][]string{
+		{"webhooks", "update", "wh_1"},
+		{"webhooks", "update", "wh_1", "--enable", "--disable"},
+		{"webhooks", "rotate-secret", "wh_1", "--expires-in", "200h"},
+		{"webhooks", "rotate-secret", "wh_1", "--expires-in", "90m"},
+		{"resolve"},
+	} {
+		if code, _, _ := runCLI(t, "", bad...); code != 2 {
+			t.Errorf("%v: code=%d, want usage error", bad, code)
+		}
+	}
+	want := []string{
+		"GET /v1/health ",
+		"GET /v1/carriers/resolve name=USPS+Priority+Mail",
+		"GET /v1/carriers/resolve name=nope",
+		`PATCH /v1/webhooks/wh_1 {"event_types":["tracking.delivered","tracking.exception"],"enabled":false}`,
+		`POST /v1/webhooks/wh_1/rotate-secret {"expires_in_hours":48}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("requests:\n%s", strings.Join(got, "\n"))
 	}
 }

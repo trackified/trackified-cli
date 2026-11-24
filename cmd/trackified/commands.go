@@ -24,6 +24,8 @@ func init() {
 		"stop":           cmdStop,
 		"carriers":       cmdCarriers,
 		"detect":         cmdDetect,
+		"resolve":        cmdResolve,
+		"health":         cmdHealth,
 		"webhooks":       cmdWebhooks,
 		"usage":          cmdUsage,
 		"verify-webhook": cmdVerifyWebhook,
@@ -158,6 +160,53 @@ var cmdDetect = idCommand("detect", func(c *cli, cl *trackified.Client, number s
 		})
 	}, err
 })
+
+func cmdResolve(c *cli, args []string) error {
+	pos, err := parse(c.flags("resolve"), args, -1)
+	if err != nil {
+		return err
+	}
+	if len(pos) == 0 {
+		return usageError("expected a carrier name")
+	}
+	name := strings.Join(pos, " ") // so unquoted names like USPS Priority Mail work
+	client, err := c.client()
+	if err != nil {
+		return err
+	}
+	r, err := client.Carriers.Resolve(c.ctx, name)
+	if err != nil {
+		return err
+	}
+	if r == nil {
+		_ = c.emit(map[string]any{"carrier": nil, "confidence": 0}, func() {
+			fmt.Fprintf(c.out, "No supported carrier matches %q\n", name)
+		})
+		return errSilent
+	}
+	return c.emit(r, func() {
+		fmt.Fprintf(c.out, "%s  %s  (confidence %.2f, matched %s)\n", r.Carrier, r.Name, r.Confidence, r.Matched)
+	})
+}
+
+func cmdHealth(c *cli, args []string) error {
+	if _, err := parse(c.flags("health"), args, 0); err != nil {
+		return err
+	}
+	key := loadAPIKey()
+	if key == "" {
+		key = "unused" // /v1/health needs no auth, but trackified.New requires a key
+	}
+	client, err := trackified.New(trackified.WithAPIKey(key), trackified.WithUserAgent("trackified-cli/"+version))
+	if err != nil {
+		return err
+	}
+	h, err := client.Health(c.ctx)
+	if err != nil {
+		return err
+	}
+	return c.emit(h, func() { fmt.Fprintf(c.out, "API status: %s\n", h.Status) })
+}
 
 func cmdList(c *cli, args []string) error {
 	fs := c.flags("list")
@@ -304,20 +353,54 @@ func cmdCarriers(c *cli, args []string) error {
 }
 
 func cmdWebhooks(c *cli, args []string) error {
+	const subs = "list, add, update, rotate-secret, rm or test"
 	if len(args) == 0 {
-		return usageError("expected list, add, rm or test")
+		return usageError("expected " + subs)
 	}
 	sub, args := args[0], args[1:]
 	fs := c.flags("webhooks " + sub)
-	events := fs.String("events", "", "comma-separated event types for add (default: all)")
-	want := map[string]int{"list": 0, "add": 1, "rm": 1, "test": 1}
+	events := fs.String("events", "", "comma-separated event types for add/update (add default: all)")
+	newURL := fs.String("url", "", "new endpoint URL for update")
+	enable := fs.Bool("enable", false, "enable the webhook (update)")
+	disable := fs.Bool("disable", false, "disable the webhook (update)")
+	expiresIn := fs.Duration("expires-in", 24*time.Hour, "how long the old secret keeps working (rotate-secret, whole hours, 0-168h)")
+	want := map[string]int{"list": 0, "add": 1, "update": 1, "rotate-secret": 1, "rm": 1, "test": 1}
 	n, ok := want[sub]
 	if !ok {
-		return usageError("unknown subcommand " + sub + "; expected list, add, rm or test")
+		return usageError("unknown subcommand " + sub + "; expected " + subs)
 	}
 	pos, err := parse(fs, args, n)
 	if err != nil {
 		return err
+	}
+	eventTypes := func() []trackified.WebhookEventType {
+		var out []trackified.WebhookEventType
+		if *events != "" {
+			for _, e := range strings.Split(*events, ",") {
+				out = append(out, trackified.WebhookEventType(strings.TrimSpace(e)))
+			}
+		}
+		return out
+	}
+	var update trackified.UpdateWebhookParams
+	var hours int
+	switch sub {
+	case "update":
+		if *enable && *disable {
+			return usageError("--enable and --disable are mutually exclusive")
+		}
+		if *enable || *disable {
+			update.Enabled = enable
+		}
+		update.URL, update.EventTypes = *newURL, eventTypes()
+		if update.URL == "" && update.EventTypes == nil && update.Enabled == nil {
+			return usageError("expected at least one of --url, --events, --enable or --disable")
+		}
+	case "rotate-secret":
+		if *expiresIn < 0 || *expiresIn > 168*time.Hour || *expiresIn%time.Hour != 0 {
+			return usageError("--expires-in must be whole hours between 0h and 168h")
+		}
+		hours = int(*expiresIn / time.Hour)
 	}
 	client, err := c.client()
 	if err != nil {
@@ -347,18 +430,32 @@ func cmdWebhooks(c *cli, args []string) error {
 			})
 		})
 	case "add":
-		p := &trackified.CreateWebhookParams{URL: pos[0]}
-		if *events != "" {
-			for _, e := range strings.Split(*events, ",") {
-				p.EventTypes = append(p.EventTypes, trackified.WebhookEventType(strings.TrimSpace(e)))
-			}
-		}
+		p := &trackified.CreateWebhookParams{URL: pos[0], EventTypes: eventTypes()}
 		w, err := client.Webhooks.Create(c.ctx, p)
 		if err != nil {
 			return err
 		}
 		return c.emit(w, func() {
 			fmt.Fprintf(c.out, "Added %s -> %s\nSigning secret (shown once, store it now): %s\n", w.ID, w.URL, w.Secret)
+		})
+	case "update":
+		w, err := client.Webhooks.Update(c.ctx, pos[0], &update)
+		if err != nil {
+			return err
+		}
+		return c.emit(w, func() { fmt.Fprintf(c.out, "Updated %s -> %s (enabled: %t)\n", w.ID, w.URL, w.Enabled) })
+	case "rotate-secret":
+		w, err := client.Webhooks.RotateSecret(c.ctx, pos[0], &trackified.RotateSecretParams{ExpiresInHours: &hours})
+		if err != nil {
+			return err
+		}
+		return c.emit(w, func() {
+			fmt.Fprintf(c.out, "New signing secret for %s: %s\nIt won't be shown again; store it now.\n", w.ID, w.Secret)
+			if w.PreviousSecretExpiresAt != nil {
+				fmt.Fprintf(c.out, "The old secret keeps working until %s.\n", w.PreviousSecretExpiresAt.Local().Format(time.DateTime))
+			} else {
+				fmt.Fprintln(c.out, "The old secret no longer works.")
+			}
 		})
 	case "rm":
 		if err := client.Webhooks.Delete(c.ctx, pos[0]); err != nil {
@@ -427,17 +524,21 @@ func cmdVerifyWebhook(c *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	ok := trackified.VerifyWebhook(body, *header, *secret, *tolerance)
-	if err := c.emit(map[string]bool{"valid": ok}, func() {
-		if ok {
+	r := trackified.VerifyDetailed(body, *header, []string{*secret}, *tolerance)
+	v := map[string]any{"valid": r.Valid}
+	if !r.Valid {
+		v["reason"] = r.Reason
+	}
+	if err := c.emit(v, func() {
+		if r.Valid {
 			fmt.Fprintln(c.out, "Signature valid")
 		} else {
-			fmt.Fprintln(c.out, "Signature INVALID")
+			fmt.Fprintf(c.out, "Signature INVALID (%s)\n", r.Reason)
 		}
 	}); err != nil {
 		return err
 	}
-	if !ok {
+	if !r.Valid {
 		return errSilent
 	}
 	return nil

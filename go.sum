@@ -1,5 +1,7 @@
 github.com/trackified/trackified-go v0.1.0 h1:RCZyTJyYZAEkLRLgNMqjXMIjoWDtF0urAbpSCPH5hS8=
 github.com/trackified/trackified-go v0.1.0/go.mod h1:v8XJGTw02zCjt7eMelTdfC4UqSL7ZgWxrs2kANK0qiU=
+github.com/trackified/trackified-go v0.1.1-0.20261124064141-76afb6bba298 h1:x4CXmZZRbJtP0FhX+Kiq2qTZ7oUcGMq1Ucr4cKIi5h4=
+github.com/trackified/trackified-go v0.1.1-0.20261124064141-76afb6bba298/go.mod h1:v8XJGTw02zCjt7eMelTdfC4UqSL7ZgWxrs2kANK0qiU=
 golang.org/x/sys v0.49.0 h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=
 golang.org/x/sys v0.49.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
 golang.org/x/term v0.47.0 h1:cpyOwQkr2Nzxe2p6KnrTG7Ei2wtzjsuSjhpXXepZ/BM=
