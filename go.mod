@@ -3,7 +3,7 @@ module github.com/trackified/trackified-cli
 go 1.26.0
 
 require (
-	github.com/trackified/trackified-go v0.1.1-0.20261124064141-76afb6bba298
+	github.com/trackified/trackified-go v0.2.0
 	golang.org/x/term v0.47.0
 )
 
