@@ -28,7 +28,7 @@ gh attestation verify trackified_0.2.0_linux_amd64.tar.gz --repo trackified/trac
 ## Quickstart
 
 ```sh
-trackified login                                   # paste your tk_live_... key; stored with 0600
+trackified login                                   # paste your live_... key; stored with 0600
 trackified track 9434650110837017316201 --carrier usps
 trackified list --status in_transit
 trackified watch trk_123                           # prints new events until delivered
@@ -51,7 +51,7 @@ trackified watch trk_123                           # prints new events until del
 | `carriers [search]` | List supported carriers, or search the full catalog |
 | `detect <number>` | Guess the carrier of a tracking number |
 | `resolve <name>` | Map a carrier name (e.g. `USPS Priority Mail`, `dhl_express`) to a carrier id (exit 1 if none matches) |
-| `webhooks list` / `add <url> [--events a,b]` / `rm <id>` / `test <id>` | Manage webhook endpoints |
+| `webhooks list` / `add <url> [--events a,b]` / `rm <id>` / `test <id>` | Manage webhook endpoints (`add` defaults to `tracking.updated,tracking.delivered`; `test --json` gives `{signature, body}` with `body` as the exact signed string) |
 | `webhooks update <id> [--url u] [--events a,b] [--enable\|--disable]` | Change a webhook; the secret is unchanged |
 | `webhooks rotate-secret <id> [--expires-in 24h]` | Issue a new signing secret (printed once). The old one keeps verifying for `--expires-in` (0h-168h; 0h drops it now) |
 | `usage` | This month's usage and limits |

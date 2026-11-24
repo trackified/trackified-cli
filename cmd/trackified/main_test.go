@@ -44,7 +44,7 @@ func TestVerifyWebhookVector(t *testing.T) {
 
 func TestLoginStoresKeyPrivately(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tk_test_abc" {
+		if r.Header.Get("Authorization") != "Bearer test_abc" {
 			w.WriteHeader(401)
 			return
 		}
@@ -58,7 +58,7 @@ func TestLoginStoresKeyPrivately(t *testing.T) {
 	t.Setenv("TRACKIFIED_API_KEY", "")
 	t.Setenv("TRACKIFIED_BASE_URL", srv.URL)
 
-	if code, _, errOut := runCLI(t, "tk_test_abc\n", "login"); code != 0 {
+	if code, _, errOut := runCLI(t, "test_abc\n", "login"); code != 0 {
 		t.Fatalf("login failed: %s", errOut)
 	}
 	p, _ := configPath()
@@ -69,11 +69,14 @@ func TestLoginStoresKeyPrivately(t *testing.T) {
 	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v", fi.Mode().Perm())
 	}
-	if got := loadAPIKey(); got != "tk_test_abc" {
+	if got := loadAPIKey(); got != "test_abc" {
 		t.Fatalf("loadAPIKey = %q", got)
 	}
-	if code, _, _ := runCLI(t, "tk_test_bad\n", "login"); code != 1 {
+	if code, _, _ := runCLI(t, "test_bad\n", "login"); code != 1 {
 		t.Fatal("bad key should fail")
+	}
+	if code, _, _ := runCLI(t, "\n", "login"); code != 2 {
+		t.Fatal("empty key should be a usage error")
 	}
 }
 
@@ -172,5 +175,26 @@ func TestV02Commands(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("requests:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestWebhookTestOutputVerifies(t *testing.T) {
+	const signed = `{"id":"evt_test","type":"tracking.updated","data":{"id":"trk_123"}}`
+	hdr := "t=1792560000,v1=19752dd2fca1872cc8aa6cc36c412fce3bbfa120480580bdb1ad9d7957dfc9f4"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Pretty-printed like the API; keys not in alphabetical order.
+		_, _ = w.Write([]byte("{\n  \"signature\": \"" + hdr + "\",\n  \"body\": {\n    \"id\": \"evt_test\",\n    \"type\": \"tracking.updated\",\n    \"data\": {\"id\": \"trk_123\"}\n  }\n}"))
+	}))
+	defer srv.Close()
+	t.Setenv("TRACKIFIED_API_KEY", "test_x")
+	t.Setenv("TRACKIFIED_BASE_URL", srv.URL)
+	code, out, _ := runCLI(t, "", "webhooks", "test", "wh_1", "--json")
+	var r struct{ Signature, Body string }
+	if code != 0 || json.Unmarshal([]byte(out), &r) != nil || r.Body != signed || r.Signature != hdr {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	code, out, _ = runCLI(t, r.Body, "verify-webhook", "--secret", "whsec_trackified_test_vector", "--header", r.Signature, "--body-file", "-", "--tolerance", "876000h")
+	if code != 0 {
+		t.Fatalf("piped body should verify: code=%d out=%s", code, out)
 	}
 }

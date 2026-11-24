@@ -78,8 +78,11 @@ func cmdLogin(c *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(key, "tk_") {
-		return usageError("API keys start with tk_live_ or tk_test_")
+	if key == "" {
+		return usageError("empty API key")
+	}
+	if !strings.HasPrefix(key, "live_") && !strings.HasPrefix(key, "test_") {
+		fmt.Fprintln(os.Stderr, "warning: API keys usually start with live_ or test_; checking it anyway")
 	}
 	client, err := trackified.New(trackified.WithAPIKey(key), trackified.WithUserAgent("trackified-cli/"+version))
 	if err != nil {
@@ -359,7 +362,7 @@ func cmdWebhooks(c *cli, args []string) error {
 	}
 	sub, args := args[0], args[1:]
 	fs := c.flags("webhooks " + sub)
-	events := fs.String("events", "", "comma-separated event types for add/update (add default: all)")
+	events := fs.String("events", "", "comma-separated event types for add/update (add default: tracking.updated,tracking.delivered)")
 	newURL := fs.String("url", "", "new endpoint URL for update")
 	enable := fs.Bool("enable", false, "enable the webhook (update)")
 	disable := fs.Bool("disable", false, "disable the webhook (update)")
@@ -467,10 +470,9 @@ func cmdWebhooks(c *cli, args []string) error {
 		if err != nil {
 			return err
 		}
-		return c.emit(r, func() {
-			fmt.Fprintf(c.out, "x-tracking-signature: %s\n", r.Signature)
-			c.json = true
-			_ = c.emit(r.Body, nil)
+		// Print the signed body exactly as received; re-encoding it reorders keys and breaks the signature.
+		return c.emit(map[string]string{"signature": r.Signature, "body": string(r.RawBody)}, func() {
+			fmt.Fprintf(c.out, "x-tracking-signature: %s\n%s\n", r.Signature, r.RawBody)
 		})
 	}
 }
