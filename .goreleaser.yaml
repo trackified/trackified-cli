@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+project_name: trackified
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/trackified
+    binary: trackified
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md, CHANGELOG.md]
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+release:
+  # lets a failed run (e.g. the tap push) be re-run for the same tag
+  replace_existing_artifacts: true
+
+changelog:
+  use: github-native
+
+brews:
+  - name: trackified
+    homepage: https://trackified.net
+    description: Track parcels across carriers from the command line
+    license: MIT
+    directory: Formula
+    # Skipped until the deploy key secret exists (see README "Releasing").
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_DEPLOY_KEY "" }}true{{ else }}false{{ end }}'
+    repository:
+      owner: trackified
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:trackified/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
+    commit_author:
+      name: trackified-release-bot
+      email: noreply@trackified.net
+    test: |
+      system "#{bin}/trackified", "version"
